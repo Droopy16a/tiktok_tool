@@ -1,10 +1,10 @@
-import { pipeline, TextToSpeechPipeline, AutomaticSpeechRecognitionPipeline } from "@xenova/transformers";
+import { pipeline, AutomaticSpeechRecognitionPipeline } from "@xenova/transformers";
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { WaveFile } from 'wavefile';
 
-let tts: TextToSpeechPipeline;
+let tts : any;
 let asr: AutomaticSpeechRecognitionPipeline;
 
 export async function POST(req: Request) {
