@@ -1,16 +1,21 @@
-import { pipeline } from "@xenova/transformers";
+import { pipeline, TextToSpeechPipeline, AutomaticSpeechRecognitionPipeline } from "@xenova/transformers";
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { WaveFile } from 'wavefile';
 
-let tts: any;
+let tts: TextToSpeechPipeline;
+let asr: AutomaticSpeechRecognitionPipeline;
 
 export async function POST(req: Request) {
   const { text } = await req.json();
 
   if (!tts) {
     tts = await pipeline("text-to-speech", "Xenova/mms-tts-eng");
+  }
+
+  if (!asr) {
+    asr = await pipeline("automatic-speech-recognition", "Xenova/whisper-base.en");
   }
 
   const speaker_embeddings =
@@ -24,5 +29,10 @@ export async function POST(req: Request) {
   const filePath = path.join(process.cwd(), 'public', 'out.wav');
   fs.writeFileSync(filePath, wav.toBuffer());
 
-  return NextResponse.json({ ok: true, url: '/out.wav' });
+  // Pass the raw audio data directly to ASR, not the WAV buffer
+  const timestamps = await asr(audio.audio, {
+    return_timestamps: 'word'
+  });
+
+  return NextResponse.json({ ok: true, url: '/out.wav', timestamps });
 }

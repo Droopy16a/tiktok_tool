@@ -3,6 +3,10 @@ import { createClient } from 'pexels';
 
 export async function POST(req: Request) {
   const { keyword } = await req.json();
+  if (!keyword) {
+    return NextResponse.json({ ok: false });
+  }
+
   var photo_url = '';
 
   const client = createClient('866URLSijsafUGBAutW0LNy9Z8BemDZKkZuvJDyNfHynszftzggQyngT');
@@ -10,7 +14,7 @@ export async function POST(req: Request) {
   await client.photos.search({ query: keyword, per_page: 1 })
   .then((res : any) => {
     if (res){
-      photo_url = res.photos[0].src;
+      photo_url = res.photos[0].src.original;
     }
   })
   .catch((err) => {
