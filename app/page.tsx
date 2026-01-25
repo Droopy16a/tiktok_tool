@@ -5,22 +5,16 @@ export default function Home() {
   const [audioFile, setAudioFile] = useState<string | null>(null);
   const [generatedVideo, setGeneratedVideo] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  
-  // const TEXT = "Bubble sort is a simple sorting algorithm. This sorting algorithm is comparison-based algorithm in which each pair of adjacent elements is compared and the elements are swapped if they are not in order. This algorithm is not suitable for large data sets as its average and worst case complexity are of O(n2) where n is the number of items.";
-  const TEXT = "Bubble sort is a simple sorting algorithm. This sorting algorithm is comparison-based algorithm in which each pair of adjacent elements is compared and the elements are swapped if they are not in order.";
 
-  useEffect(() => {
-    fetch("/api/gpt", {
-      method: "POST",
-      body: JSON.stringify({
-        prompt: "Generate a short, engaging TikTok script (under 150 words) about bubble sort. Include a hook, explanation, and call to action. Format as JSON with fields: title, hook, explanation, cta. " + TEXT
-      })
-    })
-      .then(res => res.json())
-      .then(data => console.log(data))
-      .catch(error => console.error("Error fetching GPT response:", error));
-  }, [])
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  async function getText(title : string) {
+    const res = await fetch(`/api/wiki?title=${encodeURIComponent(title)}`, {
+      method: "GET"
+    });
+    const data = await res.json();
+    return data.text as string;
+  }
 
   function getKeyword(TEXT: string) {
     const words = TEXT.split(' ');
@@ -28,28 +22,25 @@ export default function Home() {
 
     words.forEach((word) => {
       const cleanedWord = word.toLowerCase().replace(/[.,]|(is)|(are)/g, '');
-      if (dictionary[cleanedWord]) {
-        dictionary[cleanedWord] += 1;
-      } else {
-        dictionary[cleanedWord] = 1;
+      if (cleanedWord && cleanedWord.length > 0) {
+        if (dictionary[cleanedWord]) {
+          dictionary[cleanedWord] += 1;
+        } else {
+          dictionary[cleanedWord] = 1;
+        }
       }
     });
 
     return dictionary;
   }
 
-  const keywords = getKeyword(TEXT);
-
-  useEffect(() => {
-    const sortedKeywords = Object.entries(keywords).sort((a, b) => b[1] - a[1]);
-    const mostFrequentKeyword = sortedKeywords.length > 0 ? sortedKeywords[0][0] : "algorithm";
-    console.log(mostFrequentKeyword);
-  }, []);
-
-  async function getImage(keyword: string) {
+  async function getImage(keyword: string, imageIndex: number = 0) {
     const res = await fetch("/api/pexel", {
       method: "POST",
-      body: JSON.stringify({ keyword: keyword })
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ keyword: keyword, imageIndex: imageIndex })
     });
 
     const body = await res.json();
@@ -97,23 +88,30 @@ export default function Home() {
   }
 
   function findWordTimings(timestamps: any, keywords: string[]) {
-    const timings: { keyword: string; time: number; index: number }[] = [];
+    const timings: { keyword: string; time: number; index: number; imageIndex: number }[] = [];
+    const keywordOccurrenceCount: { [key: string]: number } = {};
     
     for (let i = 0; i < keywords.length; i++) {
       const keyword = keywords[i];
-      let firstOccurrence = true;
+      
+      // Initialize occurrence counter for this keyword
+      if (!keywordOccurrenceCount[keyword]) {
+        keywordOccurrenceCount[keyword] = 0;
+      }
       
       for (const chunk of timestamps.chunks) {
         if (chunk.text.toLowerCase().includes(keyword.toLowerCase())) {
-          if (firstOccurrence) {
-            timings.push({
-              keyword: keyword,
-              time: chunk.timestamp[0],
-              index: i
-            });
-            firstOccurrence = false;
-            break;
-          }
+          // Record this occurrence with its imageIndex
+          timings.push({
+            keyword: keyword,
+            time: chunk.timestamp[0],
+            index: i,
+            imageIndex: keywordOccurrenceCount[keyword]
+          });
+          
+          // Increment for next occurrence
+          keywordOccurrenceCount[keyword]++;
+          break; // Only first occurrence per keyword for display
         }
       }
     }
@@ -126,6 +124,17 @@ export default function Home() {
     setIsProcessing(true);
 
     try {
+      // Get the Wikipedia text first
+      const TEXT = await getText("cock");
+      
+      // Extract keywords from the text
+      const keywords = getKeyword(TEXT);
+      const sortedKeywords = Object.entries(keywords).sort((a, b) => b[1] - a[1]);
+      const mostFrequentKeywords = sortedKeywords.slice(0, 5).map(item => item[0]);
+
+      console.log("Most frequent keywords:", mostFrequentKeywords);
+
+      // Generate TTS from the text
       const res = await fetch("/api/tts", {
         method: "POST",
         body: JSON.stringify({ text: TEXT }),
@@ -138,10 +147,9 @@ export default function Home() {
       console.log("Full audio URL:", audioUrl);
       setAudioFile(audioUrl);
 
-      const sortedKeywords = Object.entries(keywords).sort((a, b) => b[1] - a[1]);
-      const mostFrequentKeywords = sortedKeywords.slice(0, 5).map(item => item[0]);
-
-      console.log("Most frequent keywords:", mostFrequentKeywords);
+      // Find word timings to determine which image index to use for each keyword
+      const wordTimings = findWordTimings(audio.timestamps, mostFrequentKeywords);
+      console.log('Word timings:', wordTimings);
 
       const videoResponse = await fetch('/video.mp4');
       const videoBlob = await videoResponse.blob();
@@ -152,12 +160,19 @@ export default function Home() {
       }
       const audioBlob = await audioResponse.blob();
 
-      const imagePromises = mostFrequentKeywords.map(keyword => getImage(keyword));
+      // Fetch images using the correct imageIndex for each keyword occurrence
+      const imagePromises = wordTimings.map(timing => 
+        getImage(timing.keyword, timing.imageIndex)
+      );
       const imageUrls = await Promise.all(imagePromises);
 
       console.log("Image URLs:", imageUrls);
 
-      const validImageUrls = imageUrls.filter(url => url != null);
+      const validImageUrls = imageUrls.filter(url => url != null && url !== '');
+      
+      if (validImageUrls.length === 0) {
+        console.warn("No valid image URLs found");
+      }
       
       const imageResponsePromises = validImageUrls.map(url => fetch(url));
       const imageResponses = await Promise.all(imageResponsePromises);
@@ -165,7 +180,7 @@ export default function Home() {
       const imageBlobPromises = imageResponses.map(res => res.blob());
       const imageBlobs = await Promise.all(imageBlobPromises);
 
-      const videoUrl = await addAudioAndImages(videoBlob, audioBlob, imageBlobs, mostFrequentKeywords, audio.timestamps);
+      const videoUrl = await addAudioAndImages(videoBlob, audioBlob, imageBlobs, wordTimings);
       console.log("Video with added audio URL:", videoUrl);
       setGeneratedVideo(videoUrl);
     } catch (error) {
@@ -180,7 +195,7 @@ export default function Home() {
     videoBlob: Blob,
     audioBlob: Blob,
     imageBlobs: Blob[],
-    keywords: string[],
+    wordTimings: { keyword: string; time: number; index: number; imageIndex: number }[],
     timestamps: any,
   ): Promise<string> {
     return new Promise(async (resolve, reject) => {
@@ -231,9 +246,6 @@ export default function Home() {
 
         const subtitles = generateSubtitles(timestamps);
         console.log('Subtitles:', subtitles);
-
-        const wordTimings = findWordTimings(timestamps, keywords);
-        console.log('Word timings (first occurrence only):', wordTimings);
 
         const fps = 30;
         const stream = canvas.captureStream(fps);
@@ -372,22 +384,23 @@ export default function Home() {
             );
           }
 
-          let currentImage: { opacity: number; index: number } | null = null;
+          let currentImage: { opacity: number; imageIndex: number } | null = null;
 
-          for (const timing of wordTimings) {
+          for (let i = 0; i < wordTimings.length; i++) {
+            const timing = wordTimings[i];
             const opacity = getFadeOpacity(elapsed, timing.time);
             
             if (opacity > 0) {
               const wouldOverlap = currentImage !== null;
               
               if (!wouldOverlap) {
-                currentImage = { opacity, index: timing.index };
+                currentImage = { opacity, imageIndex: i };
               }
             }
           }
 
-          if (currentImage && currentImage.opacity > 0 && images.length > currentImage.index) {
-            const img = images[currentImage.index];
+          if (currentImage && currentImage.opacity > 0 && images.length > currentImage.imageIndex) {
+            const img = images[currentImage.imageIndex];
             
             const targetAspectRatio = 16 / 9;
             let sx, sy, sWidth, sHeight;

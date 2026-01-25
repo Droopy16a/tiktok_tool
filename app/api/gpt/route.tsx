@@ -1,40 +1,54 @@
 import { NextResponse } from 'next/server';
+import { pipeline } from '@huggingface/transformers';
+
+let gen: any;
 
 export async function POST(req: Request) {
-    const { prompt } = await req.json();
+    function safeJsonParse(text: string) {
+        try {
+            return JSON.parse(text);
+        } catch {
+            // Try to extract JSON array from the text
+            const match = text.match(/\[[\s\S]*\]/);
+            if (match) {
+                return JSON.parse(match[0]);
+            }
+            throw new Error('Could not parse JSON from response');
+        }
+    }
 
-    const response = await fetch(
-        "https://api-inference.huggingface.co/models/microsoft/Phi-3-mini-4k-instruct",
-        {
-            headers: {
-                Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
-                "Content-Type": "application/json",
-            },
-            method: "POST",
-            body: JSON.stringify({
-                inputs: prompt,
-                parameters: {
-                    max_new_tokens: 500,
-                    temperature: 0.7,
-                    return_full_text: false,
-                }
-            }),
+    const { prompt } = await req.json();
+    
+    if (!gen) {
+        gen = await pipeline(
+            'text-generation',
+            'Xenova/Phi-3-mini-4k-instruct'
+        );
+    }
+
+    const response = await gen(     
+        `Create a viral tiktok video about that :
+${prompt}`,
+        { 
+            max_new_tokens: 400,
+            temperature: 0.7,
+            do_sample: true
         }
     );
 
-    const result = await response.json();
+    console.log('Full response:', response);
+    
+    // Transformers.js returns an array with generated_text
+    const generatedText = response[0].generated_text;
     
     try {
-        const generatedText = result[0].generated_text;
-        const jsonMatch = generatedText.match(/\[[\s\S]*\]/);
-        const parsedResult = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
-        
-        return NextResponse.json({ ok: true, result: parsedResult });
+        // const parsed = safeJsonParse(generatedText);
+        return NextResponse.json({ ok: true, result: generatedText });
     } catch (error) {
         return NextResponse.json({ 
             ok: false, 
-            error: 'Failed to parse JSON',
-            rawText: result 
+            error: (error as Error).message,
+            rawText: generatedText 
         });
     }
 }
