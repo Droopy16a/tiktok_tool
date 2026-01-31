@@ -5,6 +5,17 @@ export default function Home() {
   const [audioFile, setAudioFile] = useState<string | null>(null);
   const [generatedVideo, setGeneratedVideo] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [tiktokUsername, setTiktokUsername] = useState<string>("");
+  const [videoTitle, setVideoTitle] = useState<string>("Generated Video");
+  const [isUploading, setIsUploading] = useState(false);
+  const [showRegistration, setShowRegistration] = useState(false);
+  const [registrationUsername, setRegistrationUsername] = useState<string>("");
+  const [registrationCookies, setRegistrationCookies] = useState<string>("");
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [registrationTab, setRegistrationTab] = useState<"manual" | "auto">("manual");
+  const [autoUsername, setAutoUsername] = useState<string>("");
+  const [autoPassword, setAutoPassword] = useState<string>("");
+  const [autoTiktokUsername, setAutoTiktokUsername] = useState<string>("");
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -21,7 +32,7 @@ export default function Home() {
     const dictionary: { [word: string]: number } = {};
 
     words.forEach((word) => {
-      const cleanedWord = word.toLowerCase().replace(/[.,]|(is)|(are)/g, '');
+      const cleanedWord = word.toLowerCase().replace(/\b(is|are|the|and|in|he|she|a|of|on|with)\b|[.,]|\b\w+s\b/gi, '');
       if (cleanedWord && cleanedWord.length > 0) {
         if (dictionary[cleanedWord]) {
           dictionary[cleanedWord] += 1;
@@ -125,7 +136,8 @@ export default function Home() {
 
     try {
       // Get the Wikipedia text first
-      const TEXT = await getText("cock");
+      // const TEXT = await getText("star_citizen");
+      const TEXT = "I eat chocolate every day because chocolate is the better meal all time";
       
       // Extract keywords from the text
       const keywords = getKeyword(TEXT);
@@ -150,6 +162,9 @@ export default function Home() {
       // Find word timings to determine which image index to use for each keyword
       const wordTimings = findWordTimings(audio.timestamps, mostFrequentKeywords);
       console.log('Word timings:', wordTimings);
+
+      // Sort word timings by time to ensure images are fetched in order
+      wordTimings.sort((a, b) => a.time - b.time);
 
       const videoResponse = await fetch('/video.mp4');
       const videoBlob = await videoResponse.blob();
@@ -180,7 +195,7 @@ export default function Home() {
       const imageBlobPromises = imageResponses.map(res => res.blob());
       const imageBlobs = await Promise.all(imageBlobPromises);
 
-      const videoUrl = await addAudioAndImages(videoBlob, audioBlob, imageBlobs, wordTimings);
+      const videoUrl = await addAudioAndImages(videoBlob, audioBlob, imageBlobs, wordTimings, audio.timestamps);
       console.log("Video with added audio URL:", videoUrl);
       setGeneratedVideo(videoUrl);
     } catch (error) {
@@ -272,6 +287,7 @@ export default function Home() {
         };
 
         mediaRecorder.onstop = () => {
+          clearInterval(intervalId);
           const blob = new Blob(chunks, { type: 'video/webm' });
           const url = URL.createObjectURL(blob);
           videoElement.pause();
@@ -285,8 +301,10 @@ export default function Home() {
         const imagePadding = 100;
         const imageDisplayDuration = 2.0;
         const transitionDuration = 0.4;
+        // const fps = 30;
+        const frameDuration = 1000 / fps; // ~33.33ms per frame
         
-        let startTime = performance.now();
+        let frameTime = 0;
 
         videoElement.play();
         audioElement.play();
@@ -311,7 +329,7 @@ export default function Home() {
           return 0;
         };
 
-        const drawSubtitleWithHighlights = (line: Array<{text: string, start: number, end: number}>, y: number, currentTime: number) => {
+        const drawSubtitleWithHighlights = (line: Array<{text: string, start: number, end: number}>, y: number, audioTime: number) => {
           const fontSize = 56;
           ctx.font = `bold ${fontSize}px Arial`;
           ctx.textBaseline = 'middle';
@@ -323,7 +341,7 @@ export default function Home() {
       
           line.forEach((word) => {
               const cleanWord = word.text.trim().toLowerCase().replace(/[.,!?]/g, '');
-              const isActive = currentTime >= word.start && currentTime <= word.end;
+              const isActive = audioTime >= word.start && audioTime <= word.end;
       
               const wordWidth = ctx.measureText(word.text).width;
               const wordCenterX = currentX + wordWidth / 2;
@@ -357,7 +375,7 @@ export default function Home() {
         };
 
         const drawFrame = () => {
-          const elapsed = (performance.now() - startTime) / 1000;
+          const elapsed = frameTime / 1000;
           
           if (elapsed >= totalDuration) {
             mediaRecorder.stop();
@@ -475,14 +493,16 @@ export default function Home() {
 
             lines.forEach((line, index) => {
                 const lineY = startY + (index * lineHeight);
-                drawSubtitleWithHighlights(line, lineY, elapsed);
+                drawSubtitleWithHighlights(line, lineY, audioElement.currentTime);
             });
           }
 
-          requestAnimationFrame(drawFrame);
         };
 
-        requestAnimationFrame(drawFrame);
+        const intervalId = setInterval(() => {
+          drawFrame();
+          frameTime += frameDuration;
+        }, frameDuration);
         
       } catch (error) {
         reject(error);
@@ -490,10 +510,257 @@ export default function Home() {
     });
   }
 
+  async function uploadToTikTok() {
+    if (!generatedVideo) {
+      alert("Please generate a video first");
+      return;
+    }
+
+    if (!tiktokUsername) {
+      alert("Please enter your TikTok username");
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      // Convert video blob to file
+      const response = await fetch(generatedVideo);
+      const blob = await response.blob();
+      
+      const formData = new FormData();
+      formData.append("video", blob, "generated_video.webm");
+      formData.append("username", tiktokUsername);
+      formData.append("title", videoTitle);
+      formData.append("visibility", "PRIVATE");
+
+      const uploadResponse = await fetch("http://127.0.0.1:8000/api/upload-tiktok", {
+        method: "POST",
+        body: formData,
+      });
+
+      const uploadData = await uploadResponse.json();
+
+      if (uploadResponse.ok) {
+        alert("✅ Video uploaded to TikTok successfully!");
+      } else {
+        alert(`❌ Upload failed: ${uploadData.message}`);
+      }
+    } catch (error) {
+      console.error("Upload error:", error);
+      alert(`Error uploading to TikTok: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  async function registerTikTokCookies() {
+    if (!registrationUsername || !registrationCookies) {
+      alert("Please fill in both username and cookies");
+      return;
+    }
+
+    setIsRegistering(true);
+    try {
+      let cookies;
+      try {
+        cookies = JSON.parse(registrationCookies);
+      } catch (e) {
+        alert("Invalid JSON format for cookies. Please ensure it's valid JSON.");
+        setIsRegistering(false);
+        return;
+      }
+
+      const registerResponse = await fetch("http://127.0.0.1:8000/api/register-tiktok", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          username: registrationUsername,
+          cookies: cookies,
+        }),
+      });
+
+      const registerData = await registerResponse.json();
+
+      if (registerResponse.ok) {
+        alert(`✅ ${registerData.message}`);
+        setRegistrationUsername("");
+        setRegistrationCookies("");
+        setShowRegistration(false);
+      } else {
+        alert(`❌ Registration failed: ${registerData.message}`);
+      }
+    } catch (error) {
+      console.error("Registration error:", error);
+      alert(`Error registering cookies: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setIsRegistering(false);
+    }
+  }
+
+  async function autoRegisterTikTok() {
+    if (!autoUsername || !autoPassword || !autoTiktokUsername) {
+      alert("Please fill in all fields");
+      return;
+    }
+
+    setIsRegistering(true);
+    try {
+      const autoRegisterResponse = await fetch("http://127.0.0.1:8000/api/auto-register-tiktok", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          username: autoUsername,
+          password: autoPassword,
+          tiktok_username: autoTiktokUsername,
+        }),
+      });
+
+      const autoRegisterData = await autoRegisterResponse.json();
+
+      if (autoRegisterResponse.ok) {
+        alert(`✅ ${autoRegisterData.message}`);
+        setAutoUsername("");
+        setAutoPassword("");
+        setAutoTiktokUsername("");
+        setShowRegistration(false);
+      } else {
+        alert(`❌ Auto-registration failed: ${autoRegisterData.message}`);
+      }
+    } catch (error) {
+      console.error("Auto-registration error:", error);
+      alert(`Error during auto-registration: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setIsRegistering(false);
+    }
+  }
+
   return (
     <div className="p-8 bg-gray-900 min-h-screen">
       <div className="max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold text-white mb-6">Enhanced Video Generator</h1>
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-3xl font-bold text-white">Enhanced Video Generator</h1>
+          <button
+            onClick={() => setShowRegistration(!showRegistration)}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-all"
+          >
+            {showRegistration ? '✕ Close' : '🔐 Register TikTok'}
+          </button>
+        </div>
+
+        {showRegistration && (
+          <div className="mb-8 p-6 bg-gray-800 rounded-lg border-2 border-pink-500">
+            <h2 className="text-2xl font-bold text-white mb-4">🔐 Register TikTok Cookies</h2>
+            
+            {/* Tabs */}
+            <div className="flex gap-4 mb-6">
+              <button
+                onClick={() => setRegistrationTab("auto")}
+                className={`px-6 py-2 rounded-lg font-semibold transition-all ${
+                  registrationTab === "auto"
+                    ? "bg-gradient-to-r from-pink-600 to-pink-500 text-white"
+                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                }`}
+              >
+                ⚡ Auto Register (Easiest)
+              </button>
+              <button
+                onClick={() => setRegistrationTab("manual")}
+                className={`px-6 py-2 rounded-lg font-semibold transition-all ${
+                  registrationTab === "manual"
+                    ? "bg-gradient-to-r from-pink-600 to-pink-500 text-white"
+                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                }`}
+              >
+                🔧 Manual Register
+              </button>
+            </div>
+
+            {/* Auto Registration Tab */}
+            {registrationTab === "auto" && (
+              <div className="space-y-4">
+                <div className="bg-gray-700 p-4 rounded-lg text-sm text-gray-300 mb-4">
+                  <p className="font-semibold mb-2">✨ Just enter your TikTok login credentials!</p>
+                  <p>We'll automatically extract your cookies using browser automation. Your password is only used for login and not stored.</p>
+                </div>
+
+                <input
+                  type="email"
+                  placeholder="TikTok Email or Phone"
+                  value={autoUsername}
+                  onChange={(e) => setAutoUsername(e.target.value)}
+                  className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg border border-gray-600 focus:outline-none focus:border-pink-500"
+                />
+
+                <input
+                  type="password"
+                  placeholder="TikTok Password"
+                  value={autoPassword}
+                  onChange={(e) => setAutoPassword(e.target.value)}
+                  className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg border border-gray-600 focus:outline-none focus:border-pink-500"
+                />
+
+                <input
+                  type="text"
+                  placeholder="Your TikTok Username (for saving)"
+                  value={autoTiktokUsername}
+                  onChange={(e) => setAutoTiktokUsername(e.target.value)}
+                  className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg border border-gray-600 focus:outline-none focus:border-pink-500"
+                />
+
+                <button
+                  onClick={autoRegisterTikTok}
+                  disabled={isRegistering}
+                  className="w-full px-4 py-2 bg-gradient-to-r from-pink-600 to-pink-500 hover:from-pink-700 hover:to-pink-600 text-white font-bold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isRegistering ? '⏳ Auto-registering... (this may take 30-60 seconds)' : '⚡ Auto-Register Cookies'}
+                </button>
+              </div>
+            )}
+
+            {/* Manual Registration Tab */}
+            {registrationTab === "manual" && (
+              <div className="space-y-4">
+                <div className="bg-gray-700 p-4 rounded-lg text-sm text-gray-300 mb-4">
+                  <p className="mb-2"><strong>How to get your TikTok cookies:</strong></p>
+                  <ol className="list-decimal list-inside space-y-2">
+                    <li>Open TikTok.com in your browser</li>
+                    <li>Open Developer Tools (F12 or Right-click → Inspect)</li>
+                    <li>Go to the "Application" tab → "Cookies"</li>
+                    <li>Select "tiktok.com" and copy all cookies</li>
+                    <li>You need at least: <code className="bg-gray-900 px-2 py-1 rounded">sessionid</code></li>
+                  </ol>
+                </div>
+
+                <input
+                  type="text"
+                  placeholder="TikTok Username"
+                  value={registrationUsername}
+                  onChange={(e) => setRegistrationUsername(e.target.value)}
+                  className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg border border-gray-600 focus:outline-none focus:border-pink-500"
+                />
+
+                <textarea
+                  placeholder='Paste your cookies as JSON format: {"sessionid": "value", "csrf_session_id": "value", ...}'
+                  value={registrationCookies}
+                  onChange={(e) => setRegistrationCookies(e.target.value)}
+                  className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg border border-gray-600 focus:outline-none focus:border-pink-500 h-32 font-mono text-sm"
+                />
+
+                <button
+                  onClick={registerTikTokCookies}
+                  disabled={isRegistering}
+                  className="w-full px-4 py-2 bg-gradient-to-r from-pink-600 to-pink-500 hover:from-pink-700 hover:to-pink-600 text-white font-bold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isRegistering ? '⏳ Registering...' : '✅ Register Cookies'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         
         <button
           className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-bold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
@@ -515,6 +782,34 @@ export default function Home() {
             <div>
               <h2 className="text-xl font-semibold text-white mb-2">Generated Video</h2>
               <video src={generatedVideo} controls className="w-full rounded-lg shadow-xl" />
+              
+              <div className="mt-6 p-4 bg-gray-800 rounded-lg">
+                <h3 className="text-lg font-semibold text-white mb-4">Upload to TikTok</h3>
+                
+                <input
+                  type="text"
+                  placeholder="Video Title"
+                  value={videoTitle}
+                  onChange={(e) => setVideoTitle(e.target.value)}
+                  className="w-full px-4 py-2 mb-3 bg-gray-700 text-white rounded-lg border border-gray-600 focus:outline-none focus:border-pink-500"
+                />
+                
+                <input
+                  type="text"
+                  placeholder="TikTok Username"
+                  value={tiktokUsername}
+                  onChange={(e) => setTiktokUsername(e.target.value)}
+                  className="w-full px-4 py-2 mb-4 bg-gray-700 text-white rounded-lg border border-gray-600 focus:outline-none focus:border-pink-500"
+                />
+                
+                <button
+                  onClick={uploadToTikTok}
+                  disabled={isUploading || !generatedVideo}
+                  className="w-full px-4 py-2 bg-gradient-to-r from-black to-gray-800 hover:from-gray-900 hover:to-black text-white font-bold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed border-2 border-pink-500"
+                >
+                  {isUploading ? '⏳ Uploading to TikTok...' : '🎵 Upload to TikTok'}
+                </button>
+              </div>
             </div>
           )}
           
