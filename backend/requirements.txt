@@ -1,0 +1,8 @@
+Django
+djangorestframework
+django-cors-headers
+numpy
+kokoro
+openai-whisper
+torch
+torchaudio

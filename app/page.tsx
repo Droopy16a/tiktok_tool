@@ -129,43 +129,43 @@ export default function Home() {
     
     return timings.sort((a, b) => a.time - b.time);
   }
-
+  
   async function generateSpeech() {
     console.log("Generating speech...");
     setIsProcessing(true);
 
     try {
       // Get the Wikipedia text first
-      // const TEXT = await getText("star_citizen");
-      const TEXT = "I eat chocolate every day because chocolate is the better meal all time";
+      const TEXT = await getText("star_citizen");
+      // const TEXT = "I eat chocolate every day because chocolate is the best meal all time";
       
       // Extract keywords from the text
       const keywords = getKeyword(TEXT);
       const sortedKeywords = Object.entries(keywords).sort((a, b) => b[1] - a[1]);
       const mostFrequentKeywords = sortedKeywords.slice(0, 5).map(item => item[0]);
-
+      
       console.log("Most frequent keywords:", mostFrequentKeywords);
-
+      
       // Generate TTS from the text
       const res = await fetch("/api/tts", {
         method: "POST",
         body: JSON.stringify({ text: TEXT }),
       });
-
+      
       const audio = await res.json();
       console.log("Audio response:", audio);
       
       const audioUrl = audio.url.startsWith('http') ? audio.url : `${window.location.origin}${audio.url}`;
       console.log("Full audio URL:", audioUrl);
       setAudioFile(audioUrl);
-
+      
       // Find word timings to determine which image index to use for each keyword
       const wordTimings = findWordTimings(audio.timestamps, mostFrequentKeywords);
       console.log('Word timings:', wordTimings);
-
+      
       // Sort word timings by time to ensure images are fetched in order
       wordTimings.sort((a, b) => a.time - b.time);
-
+      
       const videoResponse = await fetch('/video.mp4');
       const videoBlob = await videoResponse.blob();
 
@@ -174,15 +174,15 @@ export default function Home() {
         throw new Error(`Failed to fetch audio: ${audioResponse.status} ${audioResponse.statusText}`);
       }
       const audioBlob = await audioResponse.blob();
-
+      
       // Fetch images using the correct imageIndex for each keyword occurrence
       const imagePromises = wordTimings.map(timing => 
         getImage(timing.keyword, timing.imageIndex)
       );
       const imageUrls = await Promise.all(imagePromises);
-
+      
       console.log("Image URLs:", imageUrls);
-
+      
       const validImageUrls = imageUrls.filter(url => url != null && url !== '');
       
       if (validImageUrls.length === 0) {
@@ -191,10 +191,10 @@ export default function Home() {
       
       const imageResponsePromises = validImageUrls.map(url => fetch(url));
       const imageResponses = await Promise.all(imageResponsePromises);
-
+      
       const imageBlobPromises = imageResponses.map(res => res.blob());
       const imageBlobs = await Promise.all(imageBlobPromises);
-
+      
       const videoUrl = await addAudioAndImages(videoBlob, audioBlob, imageBlobs, wordTimings, audio.timestamps);
       console.log("Video with added audio URL:", videoUrl);
       setGeneratedVideo(videoUrl);
@@ -259,6 +259,13 @@ export default function Home() {
           })
         );
 
+        const homerImage = await new Promise<HTMLImageElement>((res, rej) => {
+          const img = new Image();
+          img.onload = () => res(img);
+          img.onerror = rej;
+          img.src = '/homer.png';
+        });
+
         const subtitles = generateSubtitles(timestamps);
         console.log('Subtitles:', subtitles);
 
@@ -305,6 +312,8 @@ export default function Home() {
         const frameDuration = 1000 / fps; // ~33.33ms per frame
         
         let frameTime = 0;
+        let lastImageIndex = -1;
+        let homerFlipped = false;
 
         videoElement.play();
         audioElement.play();
@@ -387,21 +396,6 @@ export default function Home() {
           ctx.fillStyle = '#000';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-          if (videoElement.readyState >= 2) {
-            const scale_video = Math.max(
-              canvas.width / videoElement.videoWidth,
-              canvas.height / videoElement.videoHeight
-            );
-            const x_video = (canvas.width / 2) - (videoElement.videoWidth / 2) * scale_video;
-            const y_video = (canvas.height / 2) - (videoElement.videoHeight / 2) * scale_video;
-            ctx.drawImage(
-              videoElement,
-              x_video, y_video,
-              videoElement.videoWidth * scale_video,
-              videoElement.videoHeight * scale_video
-            );
-          }
-
           let currentImage: { opacity: number; imageIndex: number } | null = null;
 
           for (let i = 0; i < wordTimings.length; i++) {
@@ -415,6 +409,45 @@ export default function Home() {
                 currentImage = { opacity, imageIndex: i };
               }
             }
+          }
+
+          if (currentImage) {
+            if (currentImage.imageIndex !== lastImageIndex) {
+              if (lastImageIndex !== -1) {
+                homerFlipped = !homerFlipped;
+              }
+              lastImageIndex = currentImage.imageIndex;
+            }
+          } else if (lastImageIndex !== -1) {
+            lastImageIndex = -1;
+          }
+
+          if (videoElement.readyState >= 2) {
+            const scale_video = Math.max(
+              canvas.width / videoElement.videoWidth,
+              canvas.height / videoElement.videoHeight
+            );
+            const x_video = (canvas.width / 2) - (videoElement.videoWidth / 2) * scale_video;
+            const y_video = (canvas.height / 2) - (videoElement.videoHeight / 2) * scale_video;
+            ctx.drawImage(
+              videoElement,
+              x_video, y_video,
+              videoElement.videoWidth * scale_video,
+              videoElement.videoHeight * scale_video
+            );
+
+            ctx.save();
+            if (homerFlipped) {
+              ctx.scale(-1, 1);
+              ctx.translate(-canvas.width, 0);
+            }
+            const homerWidth = canvas.width;
+            const scale = homerWidth / homerImage.width;
+            const homerHeight = homerImage.height * scale;
+            const x = (canvas.width - homerWidth) / 2;
+            const y = canvas.height - homerHeight;
+            ctx.drawImage(homerImage, x, y, homerWidth, homerHeight);
+            ctx.restore();
           }
 
           if (currentImage && currentImage.opacity > 0 && images.length > currentImage.imageIndex) {
@@ -522,120 +555,6 @@ export default function Home() {
     }
 
     setIsUploading(true);
-    try {
-      // Convert video blob to file
-      const response = await fetch(generatedVideo);
-      const blob = await response.blob();
-      
-      const formData = new FormData();
-      formData.append("video", blob, "generated_video.webm");
-      formData.append("username", tiktokUsername);
-      formData.append("title", videoTitle);
-      formData.append("visibility", "PRIVATE");
-
-      const uploadResponse = await fetch("http://127.0.0.1:8000/api/upload-tiktok", {
-        method: "POST",
-        body: formData,
-      });
-
-      const uploadData = await uploadResponse.json();
-
-      if (uploadResponse.ok) {
-        alert("✅ Video uploaded to TikTok successfully!");
-      } else {
-        alert(`❌ Upload failed: ${uploadData.message}`);
-      }
-    } catch (error) {
-      console.error("Upload error:", error);
-      alert(`Error uploading to TikTok: ${error instanceof Error ? error.message : "Unknown error"}`);
-    } finally {
-      setIsUploading(false);
-    }
-  }
-
-  async function registerTikTokCookies() {
-    if (!registrationUsername || !registrationCookies) {
-      alert("Please fill in both username and cookies");
-      return;
-    }
-
-    setIsRegistering(true);
-    try {
-      let cookies;
-      try {
-        cookies = JSON.parse(registrationCookies);
-      } catch (e) {
-        alert("Invalid JSON format for cookies. Please ensure it's valid JSON.");
-        setIsRegistering(false);
-        return;
-      }
-
-      const registerResponse = await fetch("http://127.0.0.1:8000/api/register-tiktok", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          username: registrationUsername,
-          cookies: cookies,
-        }),
-      });
-
-      const registerData = await registerResponse.json();
-
-      if (registerResponse.ok) {
-        alert(`✅ ${registerData.message}`);
-        setRegistrationUsername("");
-        setRegistrationCookies("");
-        setShowRegistration(false);
-      } else {
-        alert(`❌ Registration failed: ${registerData.message}`);
-      }
-    } catch (error) {
-      console.error("Registration error:", error);
-      alert(`Error registering cookies: ${error instanceof Error ? error.message : "Unknown error"}`);
-    } finally {
-      setIsRegistering(false);
-    }
-  }
-
-  async function autoRegisterTikTok() {
-    if (!autoUsername || !autoPassword || !autoTiktokUsername) {
-      alert("Please fill in all fields");
-      return;
-    }
-
-    setIsRegistering(true);
-    try {
-      const autoRegisterResponse = await fetch("http://127.0.0.1:8000/api/auto-register-tiktok", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          username: autoUsername,
-          password: autoPassword,
-          tiktok_username: autoTiktokUsername,
-        }),
-      });
-
-      const autoRegisterData = await autoRegisterResponse.json();
-
-      if (autoRegisterResponse.ok) {
-        alert(`✅ ${autoRegisterData.message}`);
-        setAutoUsername("");
-        setAutoPassword("");
-        setAutoTiktokUsername("");
-        setShowRegistration(false);
-      } else {
-        alert(`❌ Auto-registration failed: ${autoRegisterData.message}`);
-      }
-    } catch (error) {
-      console.error("Auto-registration error:", error);
-      alert(`Error during auto-registration: ${error instanceof Error ? error.message : "Unknown error"}`);
-    } finally {
-      setIsRegistering(false);
-    }
   }
 
   return (
@@ -712,7 +631,7 @@ export default function Home() {
                 />
 
                 <button
-                  onClick={autoRegisterTikTok}
+                  // onClick={autoRegisterTikTok}
                   disabled={isRegistering}
                   className="w-full px-4 py-2 bg-gradient-to-r from-pink-600 to-pink-500 hover:from-pink-700 hover:to-pink-600 text-white font-bold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -751,7 +670,7 @@ export default function Home() {
                 />
 
                 <button
-                  onClick={registerTikTokCookies}
+                  // onClick={registerTikTokCookies}
                   disabled={isRegistering}
                   className="w-full px-4 py-2 bg-gradient-to-r from-pink-600 to-pink-500 hover:from-pink-700 hover:to-pink-600 text-white font-bold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
